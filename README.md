@@ -1,13 +1,78 @@
-{
-  "name": "Robot humanoid NAO v6",
-  "description": "Robot programabil pentru interacțiune om-robot și viziune",
-  "type": "ROBOT",
-  "status": "AVAILABLE",
-  "location_id": "b0000000-0000-0000-0000-000000000001",
-  "responsible_admin_id": "a0000000-0000-0000-0000-000000000001",
-  "requires_approval": true,
-  "max_consecutive_hours": 2,
-  "max_advance_days": 14,
-  "min_cancel_notice_hours": 1,
-  "attributes": { "senzori": ["camera", "microfon"] }
-}
+# RRM – Backend (Node.js + Express + PostgreSQL)
+
+API REST pentru resursele din Research Resource Manager. Toate rutele sunt sub
+`/api/v1`, iar frontend-ul (http://localhost:5173) le apelează direct, prin CORS.
+
+## Cerințe
+
+- Node.js 18 sau mai nou
+- PostgreSQL 17, cu baza de date `rrm_db`
+
+## Baza de date
+
+Varianta 1 – din backup-ul echipei (cu date de test), în pgAdmin: click dreapta
+pe Databases → Create → Database `rrm_db`, apoi click dreapta pe `rrm_db` →
+Restore… și alegeți fișierul de backup. Sau din linia de comandă:
+
+    createdb -U postgres rrm_db
+    pg_restore -U postgres -d rrm_db --no-owner <fișierul de backup>
+
+Varianta 2 – doar structura (fără date), din acest repository:
+
+    createdb -U postgres rrm_db
+    psql -U postgres -d rrm_db -f db/schema.sql
+
+Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test.
+
+## Pornire
+
+1. `npm install`
+2. Copiați `.env.example` în `.env` și completați parola de PostgreSQL în
+   `DATABASE_URL`:
+
+   | Variabilă      | Exemplu                                                   |
+   | -------------- | --------------------------------------------------------- |
+   | `PORT`         | `8000`                                                    |
+   | `DATABASE_URL` | `postgresql://postgres:parola_ta@localhost:5432/rrm_db`   |
+   | `CORS_ORIGIN`  | `http://localhost:5173` (mai multe, separate prin virgulă) |
+
+3. `npm run dev` (sau `npm start`)
+4. Verificare: http://localhost:8000/api/v1/health răspunde `{"status":"ok"}`.
+
+## Rute
+
+| Metodă | Adresă                   | Răspuns                                                 |
+| ------ | ------------------------ | ------------------------------------------------------- |
+| GET    | `/api/v1/health`         | `{"status":"ok"}` dacă baza de date răspunde            |
+| GET    | `/api/v1/resources`      | toate resursele; filtre opționale `?type=` și `?status=` |
+| GET    | `/api/v1/resources/{id}` | o resursă (404 dacă nu există)                          |
+| POST   | `/api/v1/resources`      | creează o resursă (201)                                 |
+| PUT    | `/api/v1/resources/{id}` | înlocuiește resursa (toate câmpurile)                   |
+| DELETE | `/api/v1/resources/{id}` | 204; 409 dacă resursa are rezervări                     |
+| GET    | `/api/v1/locations`      | locațiile (clădire, sală, etaj)                         |
+
+Fiecare resursă e întoarsă împreună cu locația ei (`building`, `room`, `floor`).
+Exemplu de corp pentru POST/PUT:
+
+    {
+      "name": "Robot humanoid NAO v6",
+      "description": "Robot programabil pentru interacțiune om-robot",
+      "type": "ROBOT",
+      "status": "AVAILABLE",
+      "location_id": "b0000000-0000-0000-0000-000000000001",
+      "responsible_admin_id": "a0000000-0000-0000-0000-000000000001",
+      "requires_approval": true,
+      "max_consecutive_hours": 2,
+      "max_advance_days": 14,
+      "min_cancel_notice_hours": 1,
+      "attributes": {"senzori": ["camera", "microfon"]}
+    }
+
+- `type`: `ROBOT`, `MEASURING_DEVICE`, `COMPUTE_CLUSTER` sau `LAB_ROOM`
+- `status`: `AVAILABLE` sau `UNAVAILABLE`
+- `name` și `location_id` sunt obligatorii; restul au valori implicite.
+
+## Erori
+
+- 400 la date invalide: `{"errors": ["name este obligatoriu", ...]}`
+- 400 / 404 / 409 în rest: `{"error": "mesaj"}`
