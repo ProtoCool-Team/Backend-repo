@@ -4,141 +4,141 @@ const pool = require('./db');
 
 const router = express.Router();
 
-
+// Aceleași valori ca în constrângerile CHECK din baza de date (rrm_db).
 const TYPES = ['ROBOT', 'MEASURING_DEVICE', 'COMPUTE_CLUSTER', 'LAB_ROOM'];
-const UUID_FIELDS = ['location_id', 'responsible_admin_id'];
-const POSITIVE_INT_FIELDS = ['max_consecutive_hours', 'max_advance_days', 'min_cancel_notice_hours'];
+const STATUSES = ['AVAILABLE', 'UNAVAILABLE'];
+const NAME_MAX = 150;
+const POSITIVE_INT_FIELDS = ['max_consecutive_hours', 'max_advance_days'];
+const NON_NEGATIVE_INT_FIELDS = ['min_cancel_notice_hours'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Coloanele editabile și valoarea implicită a fiecăreia (ca în baza de date).
+// Ordinea de aici dictează ordinea din toValues și din SQL-ul pentru
+// INSERT/UPDATE, deci un câmp nou se adaugă doar aici (și în validare).
+const DEFAULTS = {
+  name: '',
+  description: null,
+  type: undefined,
+  status: 'AVAILABLE',
+  location_id: null,
+  responsible_admin_id: null,
+  requires_approval: true,
+  max_consecutive_hours: null,
+  max_advance_days: null,
+  min_cancel_notice_hours: null,
+  attributes: {},
+};
+const COLUMNS = Object.keys(DEFAULTS);
+const placeholders = (from) => COLUMNS.map((_, i) => `$${i + from}`).join(', ');
+
+const INSERT_SQL = `INSERT INTO resources (resource_id, ${COLUMNS.join(', ')}, created_at)
+  VALUES ($1, ${placeholders(2)}, NOW())
+  RETURNING resource_id`;
+const UPDATE_SQL = `UPDATE resources
+  SET ${COLUMNS.map((c, i) => `${c} = $${i + 1}`).join(', ')}
+  WHERE resource_id = $${COLUMNS.length + 1}
+  RETURNING resource_id`;
+
+// Fiecare resursă e întoarsă împreună cu locația ei (clădire, sală, etaj).
+const SELECT_SQL = `SELECT r.*, l.building, l.room, l.floor
+  FROM resources r
+  LEFT JOIN locations l ON l.location_id = r.location_id`;
+
+async function selectResources(where, params) {
+  const { rows } = await pool.query(`${SELECT_SQL} ${where} ORDER BY r.created_at, r.name`, params);
+  return rows;
+}
 
 function isUuid(value) {
   return typeof value === 'string' && UUID_RE.test(value);
 }
 
-function isPositiveInt(value) {
-  return Number.isInteger(value) && value > 0;
+function notFound(res) {
+  return res.status(404).json({ error: 'Resursa nu a fost găsită' });
 }
 
-function parseId(req, res) {
-  const { id } = req.params;
-  if (!isUuid(id)) {
-    res.status(400).json({ error: 'id invalid (trebuie să fie un UUID)' });
-    return null;
-  }
-  return id;
-}
-
-
-function readResource(body = {}) {
-  const r = {
-    name: typeof body.name === 'string' ? body.name.trim() : '',
-    description: body.description ?? null,
-    type: body.type,
-    status: body.status ?? 'AVAILABLE',
-    location_id: body.location_id ?? null,
-    responsible_admin_id: body.responsible_admin_id ?? null,
-    requires_approval: body.requires_approval ?? false,
-    max_consecutive_hours: body.max_consecutive_hours ?? null,
-    max_advance_days: body.max_advance_days ?? null,
-    min_cancel_notice_hours: body.min_cancel_notice_hours ?? null,
-    attributes: body.attributes ?? {},
-  };
+// Completează câmpurile lipsă cu valorile implicite și verifică datele.
+function validateResource(body = {}) {
+  const resource = Object.fromEntries(COLUMNS.map((c) => [c, body[c] ?? DEFAULTS[c]]));
+  resource.name = typeof body.name === 'string' ? body.name.trim() : '';
 
   const errors = [];
-  if (!r.name) errors.push('name este obligatoriu');
-  if (!TYPES.includes(r.type)) errors.push(`type trebuie să fie unul dintre: ${TYPES.join(', ')}`);
-  if (typeof r.status !== 'string' || !r.status.trim()) errors.push('status trebuie să fie un text, de exemplu AVAILABLE');
-  if (typeof r.requires_approval !== 'boolean') errors.push('requires_approval trebuie să fie true sau false');
-  for (const field of UUID_FIELDS) {
-    if (r[field] !== null && !isUuid(r[field])) errors.push(`${field} trebuie să fie un UUID valid`);
+  if (!resource.name) errors.push('name este obligatoriu');
+  else if (resource.name.length > NAME_MAX) errors.push(`name poate avea cel mult ${NAME_MAX} de caractere`);
+  if (!TYPES.includes(resource.type)) errors.push(`type trebuie să fie unul dintre: ${TYPES.join(', ')}`);
+  if (!STATUSES.includes(resource.status)) errors.push(`status trebuie să fie unul dintre: ${STATUSES.join(', ')}`);
+  if (typeof resource.requires_approval !== 'boolean') {
+    errors.push('requires_approval trebuie să fie true sau false');
+  }
+  if (!isUuid(resource.location_id)) errors.push('location_id este obligatoriu și trebuie să fie un UUID valid');
+  if (resource.responsible_admin_id !== null && !isUuid(resource.responsible_admin_id)) {
+    errors.push('responsible_admin_id trebuie să fie un UUID valid');
   }
   for (const field of POSITIVE_INT_FIELDS) {
-    if (r[field] !== null && !isPositiveInt(r[field])) errors.push(`${field} trebuie să fie un număr întreg pozitiv`);
+    const v = resource[field];
+    if (v !== null && !(Number.isInteger(v) && v > 0)) errors.push(`${field} trebuie să fie un număr întreg pozitiv`);
   }
-  if (typeof r.attributes !== 'object' || Array.isArray(r.attributes)) {
+  for (const field of NON_NEGATIVE_INT_FIELDS) {
+    const v = resource[field];
+    if (v !== null && !(Number.isInteger(v) && v >= 0)) errors.push(`${field} trebuie să fie un număr întreg ≥ 0`);
+  }
+  if (typeof resource.attributes !== 'object' || Array.isArray(resource.attributes)) {
     errors.push('attributes trebuie să fie un obiect JSON');
   }
 
-  return { r, errors };
+  return { resource, errors };
 }
 
-function toValues(r) {
-  return [
-    r.name, r.description, r.type, r.status, r.location_id, r.responsible_admin_id,
-    r.requires_approval, r.max_consecutive_hours, r.max_advance_days,
-    r.min_cancel_notice_hours, JSON.stringify(r.attributes),
-  ];
+function toValues(resource) {
+  return COLUMNS.map((c) => (c === 'attributes' ? JSON.stringify(resource[c]) : resource[c]));
 }
 
-// READ 
+// Orice rută cu :id primește aici verificarea că id-ul e un UUID.
+router.param('id', (req, res, next, id) => {
+  if (!isUuid(id)) return res.status(400).json({ error: 'id invalid (trebuie să fie un UUID)' });
+  next();
+});
+
+// READ (listă, cu filtre opționale ?type= și ?status=)
 router.get('/', async (req, res) => {
   const { type = null, status = null } = req.query;
-  const { rows } = await pool.query(
-    `SELECT * FROM resources
-     WHERE ($1::text IS NULL OR type::text = $1)
-       AND ($2::text IS NULL OR status::text = $2)
-     ORDER BY created_at, name`,
+  res.json(await selectResources(
+    'WHERE ($1::text IS NULL OR r.type = $1) AND ($2::text IS NULL OR r.status = $2)',
     [type, status]
-  );
-  res.json(rows);
+  ));
 });
 
-// READ 
+// READ (una)
 router.get('/:id', async (req, res) => {
-  const id = parseId(req, res);
-  if (!id) return;
-  const { rows } = await pool.query('SELECT * FROM resources WHERE resource_id = $1', [id]);
-  if (rows.length === 0) return res.status(404).json({ error: 'Resursa nu a fost găsită' });
-  res.json(rows[0]);
+  const [row] = await selectResources('WHERE r.resource_id = $1', [req.params.id]);
+  if (!row) return notFound(res);
+  res.json(row);
 });
 
-// CREATE 
+// CREATE
 router.post('/', async (req, res) => {
-  const { r, errors } = readResource(req.body);
+  const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
-  const { rows } = await pool.query(
-    `INSERT INTO resources (resource_id, name, description, type, status, location_id,
-       responsible_admin_id, requires_approval, max_consecutive_hours, max_advance_days,
-       min_cancel_notice_hours, attributes, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-     RETURNING *`,
-    [randomUUID(), ...toValues(r)]
-  );
-  res.status(201).json(rows[0]);
+  const { rows } = await pool.query(INSERT_SQL, [randomUUID(), ...toValues(resource)]);
+  const [row] = await selectResources('WHERE r.resource_id = $1', [rows[0].resource_id]);
+  res.status(201).json(row);
 });
 
-// UPDATE 
+// UPDATE
 router.put('/:id', async (req, res) => {
-  const id = parseId(req, res);
-  if (!id) return;
-  const { r, errors } = readResource(req.body);
+  const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
-  const { rows } = await pool.query(
-    `UPDATE resources SET name = $1, description = $2, type = $3, status = $4,
-       location_id = $5, responsible_admin_id = $6, requires_approval = $7,
-       max_consecutive_hours = $8, max_advance_days = $9, min_cancel_notice_hours = $10,
-       attributes = $11
-     WHERE resource_id = $12
-     RETURNING *`,
-    [...toValues(r), id]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: 'Resursa nu a fost găsită' });
-  res.json(rows[0]);
+  const { rowCount } = await pool.query(UPDATE_SQL, [...toValues(resource), req.params.id]);
+  if (rowCount === 0) return notFound(res);
+  const [row] = await selectResources('WHERE r.resource_id = $1', [req.params.id]);
+  res.json(row);
 });
 
-// DELETE
+// DELETE (o resursă cu rezervări dă 409, vezi PG_ERRORS din server.js)
 router.delete('/:id', async (req, res) => {
-  const id = parseId(req, res);
-  if (!id) return;
-  try {
-    const { rowCount } = await pool.query('DELETE FROM resources WHERE resource_id = $1', [id]);
-    if (rowCount === 0) return res.status(404).json({ error: 'Resursa nu a fost găsită' });
-    res.status(204).end();
-  } catch (err) {
-    if (err.code === '23503') {
-      return res.status(409).json({ error: 'Resursa nu poate fi ștearsă: are rezervări sau alte date asociate' });
-    }
-    throw err;
-  }
+  const { rowCount } = await pool.query('DELETE FROM resources WHERE resource_id = $1', [req.params.id]);
+  if (rowCount === 0) return notFound(res);
+  res.status(204).end();
 });
 
 module.exports = router;
