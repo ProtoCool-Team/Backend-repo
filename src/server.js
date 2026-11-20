@@ -4,6 +4,7 @@ const cors = require('cors');
 const pool = require('./db');
 const resourcesRouter = require('./resources.routes');
 const locationsRouter = require('./locations.routes');
+const myReservationsRouter = require('./my-reservations.routes');
 
 // Toate rutele API sunt sub /api/v1 (Livrabil 5, Lab 6 pasul 3.7.3).
 const API_PREFIX = '/api/v1';
@@ -23,6 +24,7 @@ app.get(`${API_PREFIX}/health`, async (req, res) => {
 
 app.use(`${API_PREFIX}/resources`, resourcesRouter);
 app.use(`${API_PREFIX}/locations`, locationsRouter);
+app.use(`${API_PREFIX}/me/reservations`, myReservationsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta nu există' });

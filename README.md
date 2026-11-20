@@ -35,6 +35,7 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
    | `PORT`         | `8000`                                                    |
    | `DATABASE_URL` | `postgresql://postgres:parola_ta@localhost:5432/rrm_db`   |
    | `CORS_ORIGIN`  | `http://localhost:5173` (mai multe, separate prin virgulă) |
+   | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (temporar, vezi mai jos) |
 
 3. `npm run dev` (sau `npm start`)
 4. Verificare: http://localhost:8000/api/v1/health răspunde `{"status":"ok"}`.
@@ -50,6 +51,25 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
 | PUT    | `/api/v1/resources/{id}` | înlocuiește resursa (toate câmpurile)                   |
 | DELETE | `/api/v1/resources/{id}` | 204; 409 dacă resursa are rezervări                     |
 | GET    | `/api/v1/locations`      | locațiile (clădire, sală, etaj)                         |
+
+## Rezervările mele (KAN-32)
+
+Rutele lucrează cu rezervările **utilizatorului curent**. Până avem login,
+utilizatorul curent vine din antetul `X-User-Id` sau, dacă lipsește, din
+`DEMO_USER_ID` din `.env` (`src/current-user.js`).
+
+| Metodă | Adresă                                | Răspuns                                          |
+| ------ | ------------------------------------- | ------------------------------------------------ |
+| GET    | `/api/v1/me/reservations`             | rezervările mele; filtre `?status=` și `?period=upcoming\|past` |
+| GET    | `/api/v1/me/reservations/{id}`        | o rezervare (404 dacă nu e a mea)                |
+| PATCH  | `/api/v1/me/reservations/{id}/cancel` | rezervarea, cu statusul `CANCELLED`; 409 dacă nu se mai poate anula |
+
+Fiecare rezervare vine cu resursa (`resource_name`, `resource_type`, `requires_approval`),
+responsabilul ei (`responsible_name`), locația
+(`building`, `room`, `floor`), decizia administratorului (`decision`,
+`decision_reason`, `decided_at`) și `can_cancel`. O rezervare se poate anula
+dacă are statusul `DRAFT`, `PENDING` sau `APPROVED` și mai sunt cel puțin
+`min_cancel_notice_hours` ore (regula resursei) până la început.
 
 Fiecare resursă e întoarsă împreună cu locația ei (`building`, `room`, `floor`).
 Exemplu de corp pentru POST/PUT:
