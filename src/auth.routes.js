@@ -15,9 +15,12 @@ const MIN_PASSWORD = 8;
 
 // KAN-20: conturi noi doar cu emailul facultății (cerința 6.1).
 // ALLOWED_EMAIL_DOMAINS=usv.ro acceptă și subdomeniile (student.usv.ro).
-// Gol = orice domeniu (doar pentru teste).
+// Dacă variabila lipsește din .env, implicit doar usv.ro; o valoare goală
+// (ALLOWED_EMAIL_DOMAINS=) înseamnă orice domeniu (doar pentru teste).
+const DEFAULT_EMAIL_DOMAINS = 'usv.ro';
+
 function allowedDomains() {
-  return (process.env.ALLOWED_EMAIL_DOMAINS || '')
+  return (process.env.ALLOWED_EMAIL_DOMAINS ?? DEFAULT_EMAIL_DOMAINS)
     .split(',')
     .map((d) => d.trim().toLowerCase())
     .filter(Boolean);

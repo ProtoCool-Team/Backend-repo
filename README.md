@@ -39,7 +39,7 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
    | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (folosit doar cu `ALLOW_DEMO_AUTH=true`) |
    | `JWT_SECRET`   | un text lung și aleatoriu (semnează token-urile de login) |
    | `JWT_EXPIRES_IN` | `8h` (cât e valabil un login)                           |
-   | `ALLOWED_EMAIL_DOMAINS` | `usv.ro` (domeniile acceptate la creare cont; include subdomeniile) |
+   | `ALLOWED_EMAIL_DOMAINS` | `usv.ro` (domeniile acceptate la creare cont; include subdomeniile). Lipsă = `usv.ro`; gol = orice domeniu |
 
    Fără `JWT_SECRET`, serverul nu pornește.
 
@@ -97,6 +97,12 @@ deci o schimbare de rol se aplică imediat, fără un nou login.
 | PATCH  | `/api/v1/users/{id}/role`  | `{"role": "ADMINISTRATOR"}` sau `RESEARCHER`; 409 pentru propriul cont sau pentru un administrator responsabil de resurse |
 
 Un cercetător primește 403 la rutele de administrare, iar o cerere fără token 401.
+
+- Schimbarea rolului se face într-o tranzacție, cu administratorii blocați:
+  platforma rămâne mereu cu cel puțin un administrator, chiar dacă doi
+  administratori se retrogradează reciproc în același timp.
+- `responsible_admin_id` al unei resurse trebuie să fie un administrator
+  (400 altfel, la POST și PUT `/resources`).
 
 ## Rezervările mele (KAN-32)
 

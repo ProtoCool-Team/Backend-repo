@@ -1,7 +1,8 @@
 const express = require('express');
 const { randomUUID } = require('crypto');
 const pool = require('./db');
-const { adminOnly } = require('./current-user');
+const { adminOnly, ROLES } = require('./current-user');
+const { withTransaction } = require('./transaction');
 
 const router = express.Router();
 
@@ -116,13 +117,36 @@ router.get('/:id', async (req, res) => {
   res.json(row);
 });
 
+// KAN-20: responsabilul unei resurse trebuie să fie administrator.
+// FOR SHARE blochează rândul utilizatorului până la sfârșitul tranzacției,
+// ca rolul lui să nu poată fi schimbat între verificare și salvare
+// (vezi users.routes.js). Întoarce un mesaj de eroare sau null.
+async function checkResponsible(client, adminId) {
+  if (adminId === null) return null;
+  const { rows } = await client.query(
+    'SELECT role FROM users WHERE user_id = $1 FOR SHARE',
+    [adminId],
+  );
+  if (!rows.length) return 'responsible_admin_id nu există în baza de date';
+  if (rows[0].role !== ROLES.ADMINISTRATOR) {
+    return 'Responsabilul resursei trebuie să fie un administrator';
+  }
+  return null;
+}
+
 // CREATE, UPDATE, DELETE – doar administratorii (KAN-20).
 // Citirea catalogului rămâne publică (o folosește și pagina de Login).
 router.post('/', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
-  const { rows } = await pool.query(INSERT_SQL, [randomUUID(), ...toValues(resource)]);
-  const [row] = await selectResources('WHERE r.resource_id = $1', [rows[0].resource_id]);
+  const result = await withTransaction(async (client) => {
+    const error = await checkResponsible(client, resource.responsible_admin_id);
+    if (error) return { error };
+    const { rows } = await client.query(INSERT_SQL, [randomUUID(), ...toValues(resource)]);
+    return { id: rows[0].resource_id };
+  });
+  if (result.error) return res.status(400).json({ errors: [result.error] });
+  const [row] = await selectResources('WHERE r.resource_id = $1', [result.id]);
   res.status(201).json(row);
 });
 
@@ -130,8 +154,14 @@ router.post('/', ...adminOnly, async (req, res) => {
 router.put('/:id', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
-  const { rowCount } = await pool.query(UPDATE_SQL, [...toValues(resource), req.params.id]);
-  if (rowCount === 0) return notFound(res);
+  const result = await withTransaction(async (client) => {
+    const error = await checkResponsible(client, resource.responsible_admin_id);
+    if (error) return { error };
+    const { rowCount } = await client.query(UPDATE_SQL, [...toValues(resource), req.params.id]);
+    return { found: rowCount > 0 };
+  });
+  if (result.error) return res.status(400).json({ errors: [result.error] });
+  if (!result.found) return notFound(res);
   const [row] = await selectResources('WHERE r.resource_id = $1', [req.params.id]);
   res.json(row);
 });
