@@ -5,6 +5,8 @@ const pool = require('./db');
 const resourcesRouter = require('./resources.routes');
 const locationsRouter = require('./locations.routes');
 const myReservationsRouter = require('./my-reservations.routes');
+const reservationActionsRouter = require('./reservation-actions.routes');
+const resourceReservationsRouter = require('./resource-reservations.routes');
 
 // Toate rutele API sunt sub /api/v1 (Livrabil 5, Lab 6 pasul 3.7.3).
 const API_PREFIX = '/api/v1';
@@ -22,9 +24,14 @@ app.get(`${API_PREFIX}/health`, async (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.use(
+  `${API_PREFIX}/resources/:id/reservations`,
+  resourceReservationsRouter,
+);
 app.use(`${API_PREFIX}/resources`, resourcesRouter);
 app.use(`${API_PREFIX}/locations`, locationsRouter);
 app.use(`${API_PREFIX}/me/reservations`, myReservationsRouter);
+app.use(`${API_PREFIX}/me/reservations`, reservationActionsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta nu există' });
@@ -42,6 +49,11 @@ const PG_ERRORS = {
   '23514': () => [400, 'Valoarea nu respectă constrângerile bazei de date'],
   '22001': () => [400, 'Valoare prea lungă pentru unul dintre câmpuri'],
   '22P02': () => [400, 'Format de date invalid'],
+  // KAN-15: două cereri simultane pe același interval (constrângerea
+  // no_overlapping_reservations) – a doua e respinsă.
+  '23P01': () => [409, 'Intervalul se suprapune cu o rezervare existentă pentru această resursă'],
+  // Trigger-ul trg_reservations_researcher: doar cercetătorii rezervă.
+  'P0001': () => [403, 'Doar utilizatorii cu rolul de cercetător pot face rezervări'],
 };
 
 app.use((err, req, res, next) => {

@@ -92,7 +92,37 @@ Exemplu de corp pentru POST/PUT:
 - `status`: `AVAILABLE` sau `UNAVAILABLE`
 - `name` și `location_id` sunt obligatorii; restul au valori implicite.
 
+## Rezervare nouă și prelungire (KAN-15, KAN-16)
+
+| Metodă | Adresă                                          | Răspuns |
+| ------ | ----------------------------------------------- | ------- |
+| GET    | `/api/v1/resources/{id}/reservations?from=&to=` | intervalele ocupate ale resursei (`start_time`, `end_time`, `status`, `is_mine`) |
+| POST   | `/api/v1/me/reservations`                       | 201 + rezervarea nouă (`PENDING` sau, dacă resursa nu cere aprobare, `APPROVED`) |
+| PATCH  | `/api/v1/me/reservations/{id}/extend`           | rezervarea cu noul `end_time` |
+
+Corp pentru POST: `{"resource_id": "...", "start_time": "2026-12-01T08:00:00Z",
+"end_time": "2026-12-01T10:00:00Z", "purpose": "..."}`. Pentru PATCH extend:
+`{"end_time": "..."}`.
+
+**KAN-16 – reguli** (`src/reservation-rules.js`), răspuns 422 cu mesaj dacă nu
+sunt respectate:
+
+- intervalul e în viitor și sfârșitul e după început;
+- resursa are statusul `AVAILABLE`;
+- durata ≤ `max_consecutive_hours`, începutul ≤ `max_advance_days` zile de azi;
+- nu cade într-o perioadă din `unavailability_periods` (ex. calibrare);
+- e într-o singură zi, în programul din `availability_windows`
+  (ora României); o resursă fără program se poate rezerva oricând.
+
+**KAN-15 – suprapuneri** (`src/overlap.js`), răspuns 409:
+
+- înainte de salvare, verificăm cu funcția `is_resource_free` din baza de date;
+- dacă două cereri vin în același timp, constrângerea
+  `no_overlapping_reservations` o respinge pe a doua (cod 23P01 → 409);
+- la prelungire se verifică doar bucata nouă, dintre vechiul și noul sfârșit.
+
 ## Erori
 
 - 400 la date invalide: `{"errors": ["name este obligatoriu", ...]}`
-- 400 / 404 / 409 în rest: `{"error": "mesaj"}`
+- 400 / 404 / 409 / 422 în rest: `{"error": "mesaj"}`
+- 403 dacă un utilizator care nu e cercetător încearcă să rezerve
