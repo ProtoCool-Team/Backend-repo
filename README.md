@@ -35,7 +35,9 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
    | `PORT`         | `8000`                                                    |
    | `DATABASE_URL` | `postgresql://postgres:parola_ta@localhost:5432/rrm_db`   |
    | `CORS_ORIGIN`  | `http://localhost:5173` (mai multe, separate prin virgulă) |
-   | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (temporar, vezi mai jos) |
+   | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (doar pentru teste fără login) |
+   | `JWT_SECRET`   | un text lung și aleatoriu (semnează token-urile de login) |
+   | `JWT_EXPIRES_IN` | `8h` (cât e valabil un login)                           |
 
 3. `npm run dev` (sau `npm start`)
 4. Verificare: http://localhost:8000/api/v1/health răspunde `{"status":"ok"}`.
@@ -51,6 +53,25 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
 | PUT    | `/api/v1/resources/{id}` | înlocuiește resursa (toate câmpurile)                   |
 | DELETE | `/api/v1/resources/{id}` | 204; 409 dacă resursa are rezervări                     |
 | GET    | `/api/v1/locations`      | locațiile (clădire, sală, etaj)                         |
+
+## Autentificare (KAN-19)
+
+| Metodă | Adresă                  | Răspuns |
+| ------ | ----------------------- | ------- |
+| POST   | `/api/v1/auth/login`    | `{token, user}`; 401 „Email sau parolă greșită.” |
+| POST   | `/api/v1/auth/register` | 201 + `{token, user}`; 409 dacă emailul există, 400 cu `errors` pe câmpuri |
+| GET    | `/api/v1/auth/me`       | utilizatorul din token |
+
+- Corp login: `{"email": "...", "password": "..."}`.
+- Corp register: `full_name`, `email`, `password` (min. 8 caractere, litere și
+  cifre) și opțional `phone`, `department`, `laboratory`, `academic_title`.
+  Conturile noi au rolul `RESEARCHER`; administratorii se stabilesc separat (KAN-20).
+- Parolele se salvează doar ca hash bcrypt (`password_hash`), niciodată în clar.
+- Frontend-ul trimite token-ul la fiecare cerere: `Authorization: Bearer <token>`.
+  Fără token, rutele cu „utilizatorul curent” răspund 401, cu excepția
+  testelor cu `X-User-Id` / `DEMO_USER_ID`.
+- SSO cu contul universității (Microsoft) are nevoie de înregistrarea aplicației
+  de către departamentul IT; până atunci folosim login cu email și parolă.
 
 ## Rezervările mele (KAN-32)
 
