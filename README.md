@@ -102,7 +102,12 @@ Un cercetător primește 403 la rutele de administrare, iar o cerere fără toke
   platforma rămâne mereu cu cel puțin un administrator, chiar dacă doi
   administratori se retrogradează reciproc în același timp.
 - `responsible_admin_id` al unei resurse trebuie să fie un administrator
-  (400 altfel, la POST și PUT `/resources`).
+  (400 altfel, la POST și PUT `/resources`). La POST fără responsabil,
+  responsabilul devine administratorul care creează resursa.
+- POST/PUT `/resources` și PATCH `/users/{id}/role` reverifică în tranzacție
+  că apelantul mai e administrator (403 dacă a fost retrogradat între timp).
+- Antetul `Authorization` trebuie să fie `Bearer <token>` (orice majuscule);
+  un antet greșit dă 401, fără să se mai folosească `X-User-Id`.
 
 ## Rezervările mele (KAN-32)
 

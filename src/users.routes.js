@@ -25,17 +25,26 @@ router.get('/', async (req, res) => {
 
 // Verificările și schimbarea rolului, în aceeași tranzacție. Întoarce
 // {status, error} dacă schimbarea nu e permisă, altfel {user}.
-async function changeRole(client, id, role) {
+async function changeRole(client, id, role, callerId) {
   // Blocăm toți administratorii și utilizatorul ales, ca două cereri
   // simultane (ex. doi administratori care se retrogradează reciproc) să
   // fie tratate pe rând.
   const { rows: admins } = await client.query(
-    `SELECT user_id FROM users
+    `SELECT user_id, role FROM users
      WHERE role = $1 OR user_id = $2
      ORDER BY user_id
      FOR UPDATE`,
     [ROLES.ADMINISTRATOR, id],
   );
+  const callerStillAdmin = admins.some(
+    (a) => a.user_id === callerId && a.role === ROLES.ADMINISTRATOR,
+  );
+  if (!callerStillAdmin) {
+    return {
+      status: 403,
+      error: 'Doar administratorii pot face această operație.',
+    };
+  }
   const { rows: found } = await client.query(
     'SELECT role FROM users WHERE user_id = $1',
     [id],
@@ -89,11 +98,14 @@ router.patch('/:id/role', async (req, res) => {
       error: `role trebuie să fie unul dintre: ${Object.values(ROLES).join(', ')}`,
     });
   }
-  if (id === String(req.userId).toLowerCase()) {
+  const callerId = String(req.userId).toLowerCase();
+  if (id === callerId) {
     return res.status(409).json({ error: 'Nu îți poți schimba propriul rol.' });
   }
 
-  const result = await withTransaction((client) => changeRole(client, id, role));
+  const result = await withTransaction(
+    (client) => changeRole(client, id, role, callerId),
+  );
   if (result.error) {
     return res.status(result.status).json({ error: result.error });
   }

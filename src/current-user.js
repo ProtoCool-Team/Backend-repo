@@ -13,6 +13,7 @@ const { readToken } = require('./auth-token');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BEARER_RE = /^Bearer\s+(\S+)$/i;
 
 const ROLES = { RESEARCHER: 'RESEARCHER', ADMINISTRATOR: 'ADMINISTRATOR' };
 
@@ -22,10 +23,14 @@ function demoAuthAllowed() {
 
 // Id-ul utilizatorului din cerere sau un răspuns de eroare.
 function userIdFrom(req) {
-  const header = req.get('Authorization') || '';
-  if (header.startsWith('Bearer ')) {
-    const user = readToken(header.slice(7));
-    if (!user) {
+  const header = req.get('Authorization');
+  if (header !== undefined) {
+    const match = header.match(BEARER_RE);
+    if (!match) {
+      return { status: 401, error: 'Antet Authorization invalid.' };
+    }
+    const user = readToken(match[1]);
+    if (!user || typeof user.userId !== 'string' || !UUID_RE.test(user.userId)) {
       return { status: 401, error: 'Sesiunea a expirat. Autentifică-te din nou.' };
     }
     return { userId: user.userId };

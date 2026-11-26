@@ -117,6 +117,16 @@ router.get('/:id', async (req, res) => {
   res.json(row);
 });
 
+// Re-verifică în tranzacție (cu FOR SHARE) că apelantul mai e administrator,
+// pentru cazul în care a fost retrogradat de o cerere simultană.
+async function callerStillAdmin(client, userId) {
+  const { rows } = await client.query(
+    'SELECT role FROM users WHERE user_id = $1 FOR SHARE',
+    [userId],
+  );
+  return rows.length > 0 && rows[0].role === ROLES.ADMINISTRATOR;
+}
+
 // KAN-20: responsabilul unei resurse trebuie să fie administrator.
 // FOR SHARE blochează rândul utilizatorului până la sfârșitul tranzacției,
 // ca rolul lui să nu poată fi schimbat între verificare și salvare
@@ -139,12 +149,20 @@ async function checkResponsible(client, adminId) {
 router.post('/', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
+  // Fiecare resursă are nevoie de un administrator responsabil care să aprobe rezervările.
+  if (resource.responsible_admin_id === null) {
+    resource.responsible_admin_id = req.userId;
+  }
   const result = await withTransaction(async (client) => {
+    if (!(await callerStillAdmin(client, req.userId))) {
+      return { status: 403, error: 'Doar administratorii pot face această operație.' };
+    }
     const error = await checkResponsible(client, resource.responsible_admin_id);
-    if (error) return { error };
+    if (error) return { status: 400, error };
     const { rows } = await client.query(INSERT_SQL, [randomUUID(), ...toValues(resource)]);
     return { id: rows[0].resource_id };
   });
+  if (result.status === 403) return res.status(403).json({ error: result.error });
   if (result.error) return res.status(400).json({ errors: [result.error] });
   const [row] = await selectResources('WHERE r.resource_id = $1', [result.id]);
   res.status(201).json(row);
@@ -155,11 +173,15 @@ router.put('/:id', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
   const result = await withTransaction(async (client) => {
+    if (!(await callerStillAdmin(client, req.userId))) {
+      return { status: 403, error: 'Doar administratorii pot face această operație.' };
+    }
     const error = await checkResponsible(client, resource.responsible_admin_id);
-    if (error) return { error };
+    if (error) return { status: 400, error };
     const { rowCount } = await client.query(UPDATE_SQL, [...toValues(resource), req.params.id]);
     return { found: rowCount > 0 };
   });
+  if (result.status === 403) return res.status(403).json({ error: result.error });
   if (result.error) return res.status(400).json({ errors: [result.error] });
   if (!result.found) return notFound(res);
   const [row] = await selectResources('WHERE r.resource_id = $1', [req.params.id]);
