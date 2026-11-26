@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
+const authRouter = require('./auth.routes');
 const resourcesRouter = require('./resources.routes');
 const locationsRouter = require('./locations.routes');
 const myReservationsRouter = require('./my-reservations.routes');
@@ -16,6 +17,7 @@ const app = express();
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',');
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+app.use(`${API_PREFIX}/auth`, authRouter);
 
 app.get(`${API_PREFIX}/health`, async (req, res) => {
   await pool.query('SELECT 1');
