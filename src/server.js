@@ -8,6 +8,7 @@ const locationsRouter = require('./locations.routes');
 const myReservationsRouter = require('./my-reservations.routes');
 const reservationActionsRouter = require('./reservation-actions.routes');
 const resourceReservationsRouter = require('./resource-reservations.routes');
+const unavailabilityRouter = require('./unavailability.routes');
 const usersRouter = require('./users.routes');
 
 // Fără cheia de semnare, niciun login nu poate funcționa: oprim pornirea.
@@ -36,6 +37,10 @@ app.get(`${API_PREFIX}/health`, async (req, res) => {
 app.use(
   `${API_PREFIX}/resources/:id/reservations`,
   resourceReservationsRouter,
+);
+app.use(
+  `${API_PREFIX}/resources/:id/unavailability`,
+  unavailabilityRouter,
 );
 app.use(`${API_PREFIX}/resources`, resourcesRouter);
 app.use(`${API_PREFIX}/locations`, locationsRouter);

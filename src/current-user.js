@@ -76,4 +76,21 @@ function requireAdmin(req, res, next) {
 // Pentru rute: [...adminOnly] = autentificat + administrator.
 const adminOnly = [currentUser, requireAdmin];
 
-module.exports = { currentUser, requireAdmin, adminOnly, ROLES, UUID_RE };
+// Re-verifică în tranzacție (cu FOR SHARE) că apelantul mai e administrator,
+// pentru cazul în care a fost retrogradat de o cerere simultană.
+async function callerStillAdmin(client, userId) {
+  const { rows } = await client.query(
+    'SELECT role FROM users WHERE user_id = $1 FOR SHARE',
+    [userId],
+  );
+  return rows.length > 0 && rows[0].role === ROLES.ADMINISTRATOR;
+}
+
+module.exports = {
+  currentUser,
+  requireAdmin,
+  adminOnly,
+  callerStillAdmin,
+  ROLES,
+  UUID_RE,
+};

@@ -1,6 +1,7 @@
 // KAN-16: regulile unei rezervări, verificate înainte de salvare.
 // Fiecare funcție întoarce un mesaj de eroare sau null dacă e totul în regulă.
 const pool = require('./db');
+const { parseReason, TYPE_LABELS } = require('./unavailability');
 
 // Orarul resurselor (availability_windows) e în ora României.
 const TIME_ZONE = 'Europe/Bucharest';
@@ -75,8 +76,10 @@ async function checkUnavailability(resourceId, start, end) {
     [resourceId, start, end, TIME_ZONE],
   );
   if (!rows.length) return null;
-  const reason = rows[0].reason ? ` (${rows[0].reason})` : '';
-  return `Resursa este indisponibilă în perioada aleasă${reason}`;
+  const { type, details } = parseReason(rows[0].reason);
+  const label = TYPE_LABELS[type];
+  const note = details ? `${label}: ${details}` : label;
+  return `Resursa este indisponibilă în perioada aleasă (${note})`;
 }
 
 // Toate regulile KAN-16, în ordine; întoarce primul mesaj de eroare.

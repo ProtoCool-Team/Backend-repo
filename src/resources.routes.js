@@ -1,8 +1,9 @@
 const express = require('express');
 const { randomUUID } = require('crypto');
 const pool = require('./db');
-const { adminOnly, ROLES } = require('./current-user');
+const { adminOnly, callerStillAdmin, ROLES } = require('./current-user');
 const { withTransaction } = require('./transaction');
+const { TODAY_SQL, toPeriod } = require('./unavailability');
 
 const router = express.Router();
 
@@ -41,14 +42,53 @@ const UPDATE_SQL = `UPDATE resources
   WHERE resource_id = $${COLUMNS.length + 1}
   RETURNING resource_id`;
 
-// Fiecare resursă e întoarsă împreună cu locația ei (clădire, sală, etaj).
-const SELECT_SQL = `SELECT r.*, l.building, l.room, l.floor
+// Fiecare resursă e întoarsă împreună cu locația ei (clădire, sală, etaj)
+// și cu perioada curentă sau următoarea de indisponibilitate (dacă există).
+const SELECT_SQL = `SELECT
+    r.*,
+    l.building,
+    l.room,
+    l.floor,
+    u.period_id AS u_period_id,
+    to_char(u.start_date, 'YYYY-MM-DD') AS u_start_date,
+    to_char(u.end_date, 'YYYY-MM-DD') AS u_end_date,
+    u.reason AS u_reason,
+    (u.start_date <= ${TODAY_SQL}) AS u_active
   FROM resources r
-  LEFT JOIN locations l ON l.location_id = r.location_id`;
+  LEFT JOIN locations l ON l.location_id = r.location_id
+  LEFT JOIN LATERAL (
+    SELECT period_id, start_date, end_date, reason
+    FROM unavailability_periods
+    WHERE resource_id = r.resource_id
+      AND end_date >= ${TODAY_SQL}
+    ORDER BY start_date
+    LIMIT 1
+  ) u ON TRUE`;
 
 async function selectResources(where, params) {
   const { rows } = await pool.query(`${SELECT_SQL} ${where} ORDER BY r.created_at, r.name`, params);
-  return rows;
+  return rows.map(({
+    u_period_id,
+    u_start_date,
+    u_end_date,
+    u_reason,
+    u_active,
+    ...resource
+  }) => ({
+    ...resource,
+    unavailability: u_period_id
+      ? {
+        ...toPeriod({
+          period_id: u_period_id,
+          resource_id: resource.resource_id,
+          start_date: u_start_date,
+          end_date: u_end_date,
+          reason: u_reason,
+        }),
+        active: u_active,
+      }
+      : null,
+  }));
 }
 
 function isUuid(value) {
@@ -116,16 +156,6 @@ router.get('/:id', async (req, res) => {
   if (!row) return notFound(res);
   res.json(row);
 });
-
-// Re-verifică în tranzacție (cu FOR SHARE) că apelantul mai e administrator,
-// pentru cazul în care a fost retrogradat de o cerere simultană.
-async function callerStillAdmin(client, userId) {
-  const { rows } = await client.query(
-    'SELECT role FROM users WHERE user_id = $1 FOR SHARE',
-    [userId],
-  );
-  return rows.length > 0 && rows[0].role === ROLES.ADMINISTRATOR;
-}
 
 // KAN-20: responsabilul unei resurse trebuie să fie administrator.
 // FOR SHARE blochează rândul utilizatorului până la sfârșitul tranzacției,
