@@ -172,6 +172,12 @@ router.post('/', ...adminOnly, async (req, res) => {
 router.put('/:id', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
+  // O resursă existentă nu poate rămâne fără responsabil (cine aprobă?).
+  if (resource.responsible_admin_id === null) {
+    return res.status(400).json({
+      errors: ['Alege un administrator responsabil pentru resursă'],
+    });
+  }
   const result = await withTransaction(async (client) => {
     if (!(await callerStillAdmin(client, req.userId))) {
       return { status: 403, error: 'Doar administratorii pot face această operație.' };
@@ -190,8 +196,15 @@ router.put('/:id', ...adminOnly, async (req, res) => {
 
 // DELETE (o resursă cu rezervări dă 409, vezi PG_ERRORS din server.js)
 router.delete('/:id', ...adminOnly, async (req, res) => {
-  const { rowCount } = await pool.query('DELETE FROM resources WHERE resource_id = $1', [req.params.id]);
-  if (rowCount === 0) return notFound(res);
+  const result = await withTransaction(async (client) => {
+    if (!(await callerStillAdmin(client, req.userId))) return { forbidden: true };
+    const { rowCount } = await client.query('DELETE FROM resources WHERE resource_id = $1', [req.params.id]);
+    return { found: rowCount > 0 };
+  });
+  if (result.forbidden) {
+    return res.status(403).json({ error: 'Doar administratorii pot face această operație.' });
+  }
+  if (!result.found) return notFound(res);
   res.status(204).end();
 });
 
