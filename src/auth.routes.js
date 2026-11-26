@@ -12,6 +12,23 @@ const router = express.Router();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
+
+// KAN-20: conturi noi doar cu emailul facultății (cerința 6.1).
+// ALLOWED_EMAIL_DOMAINS=usv.ro acceptă și subdomeniile (student.usv.ro).
+// Gol = orice domeniu (doar pentru teste).
+function allowedDomains() {
+  return (process.env.ALLOWED_EMAIL_DOMAINS || '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isFacultyEmail(email) {
+  const domains = allowedDomains();
+  if (!domains.length) return true;
+  const domain = email.split('@')[1] || '';
+  return domains.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
 // Coloanele trimise frontend-ului (fără password_hash!).
 const PUBLIC_FIELDS = `user_id, full_name, email, role, phone, department,
   laboratory, academic_title, office`;
@@ -48,6 +65,10 @@ function validateRegister(body) {
   const password = String(body.password || '');
   if (fullName.length < 3) errors.full_name = 'Completează numele complet.';
   if (!EMAIL_RE.test(email)) errors.email = 'Adresa de email nu este validă.';
+  else if (!isFacultyEmail(email)) {
+    errors.email = 'Folosește adresa de email a facultății ' +
+      `(${allowedDomains().map((d) => `@${d}`).join(', ')}).`;
+  }
   if (password.length < MIN_PASSWORD ||
       !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
     errors.password = `Parola trebuie să aibă cel puțin ${MIN_PASSWORD} ` +

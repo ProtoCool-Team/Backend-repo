@@ -8,6 +8,13 @@ const locationsRouter = require('./locations.routes');
 const myReservationsRouter = require('./my-reservations.routes');
 const reservationActionsRouter = require('./reservation-actions.routes');
 const resourceReservationsRouter = require('./resource-reservations.routes');
+const usersRouter = require('./users.routes');
+
+// Fără cheia de semnare, niciun login nu poate funcționa: oprim pornirea.
+if (!process.env.JWT_SECRET) {
+  console.error('Lipsește JWT_SECRET din .env (vezi .env.example).');
+  process.exit(1);
+}
 
 // Toate rutele API sunt sub /api/v1 (Livrabil 5, Lab 6 pasul 3.7.3).
 const API_PREFIX = '/api/v1';
@@ -32,6 +39,7 @@ app.use(
 );
 app.use(`${API_PREFIX}/resources`, resourcesRouter);
 app.use(`${API_PREFIX}/locations`, locationsRouter);
+app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/me/reservations`, myReservationsRouter);
 app.use(`${API_PREFIX}/me/reservations`, reservationActionsRouter);
 
@@ -54,15 +62,26 @@ const PG_ERRORS = {
   // KAN-15: două cereri simultane pe același interval (constrângerea
   // no_overlapping_reservations) – a doua e respinsă.
   '23P01': () => [409, 'Intervalul se suprapune cu o rezervare existentă pentru această resursă'],
-  // Trigger-ul trg_reservations_researcher: doar cercetătorii rezervă.
-  'P0001': () => [403, 'Doar utilizatorii cu rolul de cercetător pot face rezervări'],
+  // RAISE EXCEPTION din trigger-ele de rol (P0001). Mesajul depinde de
+  // trigger: trg_reservations_researcher sau trg_decisions_administrator.
+  'P0001': (req, err) => [403, roleTriggerMessage(err.message)],
 };
+
+function roleTriggerMessage(message = '') {
+  if (message.includes('RESEARCHER')) {
+    return 'Doar utilizatorii cu rolul de cercetător pot face rezervări';
+  }
+  if (message.includes('ADMINISTRATOR')) {
+    return 'Doar administratorii pot lua această decizie';
+  }
+  return message || 'Operație nepermisă';
+}
 
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'JSON invalid în corpul cererii' });
   }
-  const known = PG_ERRORS[err.code]?.(req);
+  const known = PG_ERRORS[err.code]?.(req, err);
   if (known) {
     return res.status(known[0]).json({ error: known[1], detail: err.detail });
   }

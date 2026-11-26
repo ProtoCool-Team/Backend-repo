@@ -1,6 +1,7 @@
 const express = require('express');
 const { randomUUID } = require('crypto');
 const pool = require('./db');
+const { adminOnly } = require('./current-user');
 
 const router = express.Router();
 
@@ -115,8 +116,9 @@ router.get('/:id', async (req, res) => {
   res.json(row);
 });
 
-// CREATE
-router.post('/', async (req, res) => {
+// CREATE, UPDATE, DELETE – doar administratorii (KAN-20).
+// Citirea catalogului rămâne publică (o folosește și pagina de Login).
+router.post('/', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
   const { rows } = await pool.query(INSERT_SQL, [randomUUID(), ...toValues(resource)]);
@@ -125,7 +127,7 @@ router.post('/', async (req, res) => {
 });
 
 // UPDATE
-router.put('/:id', async (req, res) => {
+router.put('/:id', ...adminOnly, async (req, res) => {
   const { resource, errors } = validateResource(req.body);
   if (errors.length) return res.status(400).json({ errors });
   const { rowCount } = await pool.query(UPDATE_SQL, [...toValues(resource), req.params.id]);
@@ -135,7 +137,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE (o resursă cu rezervări dă 409, vezi PG_ERRORS din server.js)
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', ...adminOnly, async (req, res) => {
   const { rowCount } = await pool.query('DELETE FROM resources WHERE resource_id = $1', [req.params.id]);
   if (rowCount === 0) return notFound(res);
   res.status(204).end();
