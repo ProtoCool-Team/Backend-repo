@@ -127,3 +127,5 @@ function cancelRefusal(row) {
 }
 
 module.exports = router;
+// Folosită și de reservation-actions.routes.js, ca să întoarcă aceeași formă.
+module.exports.findOne = findOne;
