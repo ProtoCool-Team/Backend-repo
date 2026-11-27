@@ -110,6 +110,28 @@ Un cercetător primește 403 la rutele de administrare, iar o cerere fără toke
 - Antetul `Authorization` trebuie să fie `Bearer <token>` (orice majuscule);
   un antet greșit dă 401, fără să se mai folosească `X-User-Id`.
 
+## Indisponibilitate și reparații (KAN-8)
+
+Un administrator marchează o resursă temporar „În revizie” sau „Defect”
+pentru un interval de zile. Perioadele stau în tabelul
+`unavailability_periods`; rezervările care cad în ele sunt refuzate (422).
+
+| Metodă | Adresă | Răspuns |
+| ------ | ------ | ------- |
+| GET    | `/api/v1/resources/{id}/unavailability` | perioadele curente și viitoare (orice utilizator logat) |
+| POST   | `/api/v1/resources/{id}/unavailability` | `{type, start_date, end_date, details}` – doar administratori; 201 `{period, affected_reservations}` |
+| DELETE | `/api/v1/resources/{id}/unavailability/{periodId}` | 204 dacă perioada începe azi sau mai târziu (se șterge); 200 dacă a început înainte de azi și e în curs (se încheie ieri); 409 dacă s-a încheiat |
+
+- `type`: `IN_REVIEW` sau `DEFECT`. Schema nu s-a schimbat: tipul se
+  păstrează în `reason` ca `DEFECT: detalii`; motivele vechi fără prefix
+  sunt tratate ca „În revizie”.
+- Datele sunt zile (`YYYY-MM-DD`, ora României); perioada nu poate începe
+  în trecut și nu se poate suprapune cu alta a aceleiași resurse (409).
+- `affected_reservations` = rezervările active din perioadă. Nu se anulează
+  automat; anunțarea utilizatorilor vine cu notificările.
+- `GET /resources` întoarce la fiecare resursă `unavailability`: perioada
+  curentă (`active: true`) sau următoarea, ori `null`.
+
 ## Rezervările mele (KAN-32)
 
 Rutele lucrează cu rezervările **utilizatorului curent** (cel din token-ul
