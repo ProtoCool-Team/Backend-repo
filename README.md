@@ -120,7 +120,7 @@ pentru un interval de zile. Perioadele stau în tabelul
 | ------ | ------ | ------- |
 | GET    | `/api/v1/resources/{id}/unavailability` | perioadele curente și viitoare (orice utilizator logat) |
 | POST   | `/api/v1/resources/{id}/unavailability` | `{type, start_date, end_date, details}` – doar administratori; 201 `{period, affected_reservations}` |
-| DELETE | `/api/v1/resources/{id}/unavailability/{periodId}` | 204 dacă perioada n-a început; 200 dacă era în curs (se încheie ieri); 409 dacă s-a încheiat |
+| DELETE | `/api/v1/resources/{id}/unavailability/{periodId}` | 204 dacă perioada începe azi sau mai târziu (se șterge); 200 dacă a început înainte de azi și e în curs (se încheie ieri); 409 dacă s-a încheiat |
 
 - `type`: `IN_REVIEW` sau `DEFECT`. Schema nu s-a schimbat: tipul se
   păstrează în `reason` ca `DEFECT: detalii`; motivele vechi fără prefix

@@ -161,6 +161,7 @@ router.post('/', ...adminOnly, validateResourceId, async (req, res) => {
       [id, start_date, end_date, encodeReason(type, details)],
     );
 
+    // Rezervările care nu s-au încheiat încă și cad în perioadă.
     // TODO: rezervările afectate nu sunt anulate automat aici; notificările
     // pentru utilizatorii afectați vor fi implementate într-un tichet ulterior.
     const { rows: affectedReservations } = await client.query(
@@ -168,6 +169,7 @@ router.post('/', ...adminOnly, validateResourceId, async (req, res) => {
        FROM reservations
        WHERE resource_id = $1
          AND status = ANY($4::text[])
+         AND end_time > now()
          AND tstzrange(start_time, end_time, '[)') && tstzrange(
            ($2::date)::timestamp AT TIME ZONE 'Europe/Bucharest',
            (($3::date) + 1)::timestamp AT TIME ZONE 'Europe/Bucharest',
