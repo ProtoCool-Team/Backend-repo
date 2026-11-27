@@ -3,7 +3,7 @@ const { randomUUID } = require('crypto');
 const pool = require('./db');
 const { adminOnly, callerStillAdmin, ROLES } = require('./current-user');
 const { withTransaction } = require('./transaction');
-const { TODAY_SQL, toPeriod } = require('./unavailability');
+const { PERIOD_COLUMNS, TODAY_SQL, toPeriod } = require('./unavailability');
 
 const router = express.Router();
 
@@ -49,44 +49,24 @@ const SELECT_SQL = `SELECT
     l.building,
     l.room,
     l.floor,
-    u.period_id AS u_period_id,
-    to_char(u.start_date, 'YYYY-MM-DD') AS u_start_date,
-    to_char(u.end_date, 'YYYY-MM-DD') AS u_end_date,
-    u.reason AS u_reason,
-    (u.start_date <= ${TODAY_SQL}) AS u_active
+    to_jsonb(u) AS u_period
   FROM resources r
   LEFT JOIN locations l ON l.location_id = r.location_id
   LEFT JOIN LATERAL (
-    SELECT period_id, start_date, end_date, reason
+    SELECT ${PERIOD_COLUMNS}, (start_date <= ${TODAY_SQL}) AS active
     FROM unavailability_periods
     WHERE resource_id = r.resource_id
       AND end_date >= ${TODAY_SQL}
-    ORDER BY start_date
+    ORDER BY unavailability_periods.start_date
     LIMIT 1
   ) u ON TRUE`;
 
 async function selectResources(where, params) {
   const { rows } = await pool.query(`${SELECT_SQL} ${where} ORDER BY r.created_at, r.name`, params);
-  return rows.map(({
-    u_period_id,
-    u_start_date,
-    u_end_date,
-    u_reason,
-    u_active,
-    ...resource
-  }) => ({
+  return rows.map(({ u_period, ...resource }) => ({
     ...resource,
-    unavailability: u_period_id
-      ? {
-        ...toPeriod({
-          period_id: u_period_id,
-          resource_id: resource.resource_id,
-          start_date: u_start_date,
-          end_date: u_end_date,
-          reason: u_reason,
-        }),
-        active: u_active,
-      }
+    unavailability: u_period
+      ? { ...toPeriod(u_period), active: u_period.active }
       : null,
   }));
 }

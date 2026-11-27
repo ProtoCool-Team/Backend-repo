@@ -9,8 +9,19 @@ const TYPE_LABELS = {
   DEFECT: 'Defect',
 };
 
+// Orarul și perioadele sunt în ora României.
+const TIME_ZONE = 'Europe/Bucharest';
+
 // Data curentă în fusul orar al României, pentru comparații cu coloanele DATE.
-const TODAY_SQL = "(now() AT TIME ZONE 'Europe/Bucharest')::date";
+const TODAY_SQL = `(now() AT TIME ZONE '${TIME_ZONE}')::date`;
+
+// Coloanele unei perioade, cu datele ca text 'YYYY-MM-DD': pg ar transforma
+// DATE în obiecte Date la miezul nopții local, ceea ce mută ziua în JSON.
+const PERIOD_COLUMNS = `period_id,
+  resource_id,
+  to_char(start_date, 'YYYY-MM-DD') AS start_date,
+  to_char(end_date, 'YYYY-MM-DD') AS end_date,
+  reason`;
 
 function encodeReason(type, details) {
   const text = typeof details === 'string' ? details.trim() : '';
@@ -18,8 +29,7 @@ function encodeReason(type, details) {
 }
 
 function parseReason(reason) {
-  if (!reason) return { type: 'IN_REVIEW', details: '' };
-  const text = String(reason).trim();
+  const text = String(reason ?? '').trim();
   if (!text) return { type: 'IN_REVIEW', details: '' };
   for (const type of UNAVAILABILITY_TYPES) {
     if (text === type) return { type, details: '' };
@@ -46,7 +56,9 @@ function toPeriod(row) {
 module.exports = {
   UNAVAILABILITY_TYPES,
   TYPE_LABELS,
+  TIME_ZONE,
   TODAY_SQL,
+  PERIOD_COLUMNS,
   encodeReason,
   parseReason,
   toPeriod,

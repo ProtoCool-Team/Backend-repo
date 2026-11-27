@@ -12,7 +12,9 @@ const { withTransaction } = require('./transaction');
 const { BLOCKING } = require('./overlap');
 const {
   UNAVAILABILITY_TYPES,
+  TIME_ZONE,
   TODAY_SQL,
+  PERIOD_COLUMNS,
   encodeReason,
   toPeriod,
 } = require('./unavailability');
@@ -21,7 +23,17 @@ const router = express.Router({ mergeParams: true });
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DETAILS_MAX = 200;
-const FORBIDDEN_ERROR = 'Doar administratorii pot face această operație.';
+
+// Rezultatele tranzacțiilor au forma { status, body } (fără body = 204).
+const FORBIDDEN = {
+  status: 403,
+  body: { error: 'Doar administratorii pot face această operație.' },
+};
+const RESOURCE_NOT_FOUND = { status: 404, body: { error: 'Resursa nu a fost găsită' } };
+
+function send(res, { status, body }) {
+  return body ? res.status(status).json(body) : res.status(status).end();
+}
 
 function isValidDateString(value) {
   if (typeof value !== 'string' || !DATE_RE.test(value)) return false;
@@ -34,12 +46,21 @@ function isValidDateString(value) {
   );
 }
 
+// :id vine din montarea părintelui (mergeParams), așa că router.param('id')
+// nu se declanșează aici; îl verificăm pe fiecare rută, după autentificare.
 function validateResourceId(req, res, next) {
   if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'id invalid (trebuie să fie un UUID)' });
   }
   next();
 }
+
+router.param('periodId', (req, res, next, periodId) => {
+  if (!UUID_RE.test(periodId)) {
+    return res.status(400).json({ error: 'periodId invalid (trebuie să fie un UUID)' });
+  }
+  next();
+});
 
 function validatePeriodBody(body = {}) {
   const errors = [];
@@ -75,27 +96,22 @@ function validatePeriodBody(body = {}) {
 // Perioadele curente și viitoare ale unei resurse.
 router.get('/', currentUser, validateResourceId, async (req, res) => {
   const { id } = req.params;
-  const exists = await pool.query(
-    'SELECT 1 FROM resources WHERE resource_id = $1',
-    [id],
-  );
-  if (!exists.rowCount) {
-    return res.status(404).json({ error: 'Resursa nu a fost găsită' });
-  }
-
   const { rows } = await pool.query(
-    `SELECT
-       period_id,
-       resource_id,
-       to_char(start_date, 'YYYY-MM-DD') AS start_date,
-       to_char(end_date, 'YYYY-MM-DD') AS end_date,
-       reason
+    `SELECT ${PERIOD_COLUMNS}
      FROM unavailability_periods
      WHERE resource_id = $1
        AND end_date >= ${TODAY_SQL}
      ORDER BY start_date`,
     [id],
   );
+  // O listă goală poate însemna și o resursă inexistentă.
+  if (!rows.length) {
+    const exists = await pool.query(
+      'SELECT 1 FROM resources WHERE resource_id = $1',
+      [id],
+    );
+    if (!exists.rowCount) return send(res, RESOURCE_NOT_FOUND);
+  }
   res.json(rows.map(toPeriod));
 });
 
@@ -109,27 +125,20 @@ router.post('/', ...adminOnly, validateResourceId, async (req, res) => {
   const { type, start_date, end_date, details } = body;
 
   const result = await withTransaction(async (client) => {
-    const resource = await client.query(
-      'SELECT 1 FROM resources WHERE resource_id = $1 FOR UPDATE',
-      [id],
+    if (!(await callerStillAdmin(client, req.userId))) return FORBIDDEN;
+
+    // FOR UPDATE serializează adăugările simultane pentru aceeași resursă.
+    const { rows: [resource] } = await client.query(
+      `SELECT ($2::date < ${TODAY_SQL}) AS in_past
+       FROM resources WHERE resource_id = $1 FOR UPDATE`,
+      [id, start_date],
     );
-    if (!resource.rowCount) {
-      return { status: 404, error: 'Resursa nu a fost găsită' };
+    if (!resource) return RESOURCE_NOT_FOUND;
+    if (resource.in_past) {
+      return { status: 400, body: { errors: ['Perioada nu poate începe în trecut'] } };
     }
 
-    if (!(await callerStillAdmin(client, req.userId))) {
-      return { status: 403, error: FORBIDDEN_ERROR };
-    }
-
-    const { rows: [dateCheck] } = await client.query(
-      `SELECT ($1::date < ${TODAY_SQL}) AS in_past`,
-      [start_date],
-    );
-    if (dateCheck.in_past) {
-      return { status: 400, errors: ['Perioada nu poate începe în trecut'] };
-    }
-
-    const { rows: overlapping } = await client.query(
+    const { rows: [other] } = await client.query(
       `SELECT
          to_char(start_date, 'YYYY-MM-DD') AS start_date,
          to_char(end_date, 'YYYY-MM-DD') AS end_date
@@ -141,74 +150,58 @@ router.post('/', ...adminOnly, validateResourceId, async (req, res) => {
        LIMIT 1`,
       [id, start_date, end_date],
     );
-    if (overlapping.length) {
-      const other = overlapping[0];
+    if (other) {
       return {
         status: 409,
-        error: `Se suprapune cu o altă perioadă de indisponibilitate (${other.start_date} – ${other.end_date})`,
+        body: {
+          error: `Se suprapune cu o altă perioadă de indisponibilitate (${other.start_date} – ${other.end_date})`,
+        },
       };
     }
 
     const { rows: [inserted] } = await client.query(
       `INSERT INTO unavailability_periods (resource_id, start_date, end_date, reason)
        VALUES ($1, $2::date, $3::date, $4)
-       RETURNING
-         period_id,
-         resource_id,
-         to_char(start_date, 'YYYY-MM-DD') AS start_date,
-         to_char(end_date, 'YYYY-MM-DD') AS end_date,
-         reason`,
+       RETURNING ${PERIOD_COLUMNS}`,
       [id, start_date, end_date, encodeReason(type, details)],
     );
 
     // Rezervările care nu s-au încheiat încă și cad în perioadă.
     // TODO: rezervările afectate nu sunt anulate automat aici; notificările
     // pentru utilizatorii afectați vor fi implementate într-un tichet ulterior.
-    const { rows: affectedReservations } = await client.query(
+    const { rows: affected } = await client.query(
       `SELECT reservation_id, start_time, end_time, status
        FROM reservations
        WHERE resource_id = $1
          AND status = ANY($4::text[])
          AND end_time > now()
          AND tstzrange(start_time, end_time, '[)') && tstzrange(
-           ($2::date)::timestamp AT TIME ZONE 'Europe/Bucharest',
-           (($3::date) + 1)::timestamp AT TIME ZONE 'Europe/Bucharest',
+           ($2::date)::timestamp AT TIME ZONE $5,
+           (($3::date) + 1)::timestamp AT TIME ZONE $5,
            '[)'
          )
        ORDER BY start_time`,
-      [id, start_date, end_date, BLOCKING],
+      [id, start_date, end_date, BLOCKING, TIME_ZONE],
     );
 
     return {
       status: 201,
-      period: toPeriod(inserted),
-      affected_reservations: affectedReservations,
+      body: { period: toPeriod(inserted), affected_reservations: affected },
     };
   });
 
-  if (result.errors) return res.status(result.status).json({ errors: result.errors });
-  if (result.error) return res.status(result.status).json({ error: result.error });
-  res.status(201).json({
-    period: result.period,
-    affected_reservations: result.affected_reservations,
-  });
+  send(res, result);
 });
 
 // Șterge o perioadă viitoare sau încheie mai devreme una aflată în desfășurare.
 router.delete('/:periodId', ...adminOnly, validateResourceId, async (req, res) => {
   const { id, periodId } = req.params;
-  if (!UUID_RE.test(periodId)) {
-    return res.status(400).json({ error: 'periodId invalid (trebuie să fie un UUID)' });
-  }
 
   const result = await withTransaction(async (client) => {
-    if (!(await callerStillAdmin(client, req.userId))) {
-      return { status: 403, error: FORBIDDEN_ERROR };
-    }
+    if (!(await callerStillAdmin(client, req.userId))) return FORBIDDEN;
 
-    const { rows } = await client.query(
+    const { rows: [period] } = await client.query(
       `SELECT
-         period_id,
          (start_date >= ${TODAY_SQL}) AS is_future_or_today,
          (end_date < ${TODAY_SQL}) AS is_ended
        FROM unavailability_periods
@@ -216,18 +209,15 @@ router.delete('/:periodId', ...adminOnly, validateResourceId, async (req, res) =
        FOR UPDATE`,
       [periodId, id],
     );
-    if (!rows.length) {
+    if (!period) {
       const resource = await client.query(
         'SELECT 1 FROM resources WHERE resource_id = $1',
         [id],
       );
-      if (!resource.rowCount) {
-        return { status: 404, error: 'Resursa nu a fost găsită' };
-      }
-      return { status: 404, error: 'Perioada nu a fost găsită' };
+      if (!resource.rowCount) return RESOURCE_NOT_FOUND;
+      return { status: 404, body: { error: 'Perioada nu a fost găsită' } };
     }
 
-    const period = rows[0];
     if (period.is_future_or_today) {
       await client.query(
         'DELETE FROM unavailability_periods WHERE period_id = $1',
@@ -236,27 +226,20 @@ router.delete('/:periodId', ...adminOnly, validateResourceId, async (req, res) =
       return { status: 204 };
     }
     if (period.is_ended) {
-      return { status: 409, error: 'Perioada s-a încheiat deja' };
+      return { status: 409, body: { error: 'Perioada s-a încheiat deja' } };
     }
 
     const { rows: [updated] } = await client.query(
       `UPDATE unavailability_periods
        SET end_date = (${TODAY_SQL} - 1)
        WHERE period_id = $1
-       RETURNING
-         period_id,
-         resource_id,
-         to_char(start_date, 'YYYY-MM-DD') AS start_date,
-         to_char(end_date, 'YYYY-MM-DD') AS end_date,
-         reason`,
+       RETURNING ${PERIOD_COLUMNS}`,
       [periodId],
     );
-    return { status: 200, period: toPeriod(updated) };
+    return { status: 200, body: toPeriod(updated) };
   });
 
-  if (result.error) return res.status(result.status).json({ error: result.error });
-  if (result.status === 204) return res.status(204).end();
-  res.json(result.period);
+  send(res, result);
 });
 
 module.exports = router;

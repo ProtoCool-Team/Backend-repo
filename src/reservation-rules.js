@@ -1,10 +1,9 @@
 // KAN-16: regulile unei rezervări, verificate înainte de salvare.
 // Fiecare funcție întoarce un mesaj de eroare sau null dacă e totul în regulă.
 const pool = require('./db');
-const { parseReason, TYPE_LABELS } = require('./unavailability');
+// Orarul resurselor (availability_windows) e în ora României (TIME_ZONE).
+const { parseReason, TYPE_LABELS, TIME_ZONE } = require('./unavailability');
 
-// Orarul resurselor (availability_windows) e în ora României.
-const TIME_ZONE = 'Europe/Bucharest';
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
