@@ -35,9 +35,13 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
    | `PORT`         | `8000`                                                    |
    | `DATABASE_URL` | `postgresql://postgres:parola_ta@localhost:5432/rrm_db`   |
    | `CORS_ORIGIN`  | `http://localhost:5173` (mai multe, separate prin virgulă) |
-   | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (doar pentru teste fără login) |
+   | `ALLOW_DEMO_AUTH` | `false` (doar `true` pentru teste fără login, vezi mai jos) |
+   | `DEMO_USER_ID` | `a0000000-0000-0000-0000-000000000003` (folosit doar cu `ALLOW_DEMO_AUTH=true`) |
    | `JWT_SECRET`   | un text lung și aleatoriu (semnează token-urile de login) |
    | `JWT_EXPIRES_IN` | `8h` (cât e valabil un login)                           |
+   | `ALLOWED_EMAIL_DOMAINS` | `usv.ro` (domeniile acceptate la creare cont; include subdomeniile). Lipsă = `usv.ro`; gol = orice domeniu |
+
+   Fără `JWT_SECRET`, serverul nu pornește.
 
 3. `npm run dev` (sau `npm start`)
 4. Verificare: http://localhost:8000/api/v1/health răspunde `{"status":"ok"}`.
@@ -49,9 +53,9 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
 | GET    | `/api/v1/health`         | `{"status":"ok"}` dacă baza de date răspunde            |
 | GET    | `/api/v1/resources`      | toate resursele; filtre opționale `?type=` și `?status=` |
 | GET    | `/api/v1/resources/{id}` | o resursă (404 dacă nu există)                          |
-| POST   | `/api/v1/resources`      | creează o resursă (201)                                 |
-| PUT    | `/api/v1/resources/{id}` | înlocuiește resursa (toate câmpurile)                   |
-| DELETE | `/api/v1/resources/{id}` | 204; 409 dacă resursa are rezervări                     |
+| POST   | `/api/v1/resources`      | creează o resursă (201) – doar administratori           |
+| PUT    | `/api/v1/resources/{id}` | înlocuiește resursa (toate câmpurile) – doar administratori |
+| DELETE | `/api/v1/resources/{id}` | 204; 409 dacă resursa are rezervări – doar administratori |
 | GET    | `/api/v1/locations`      | locațiile (clădire, sală, etaj)                         |
 
 ## Autentificare (KAN-19)
@@ -68,16 +72,48 @@ Backup-ul nu se urcă pe GitHub: conține parolele (hash) utilizatorilor de test
   Conturile noi au rolul `RESEARCHER`; administratorii se stabilesc separat (KAN-20).
 - Parolele se salvează doar ca hash bcrypt (`password_hash`), niciodată în clar.
 - Frontend-ul trimite token-ul la fiecare cerere: `Authorization: Bearer <token>`.
-  Fără token, rutele cu „utilizatorul curent” răspund 401, cu excepția
-  testelor cu `X-User-Id` / `DEMO_USER_ID`.
+  Fără token, rutele cu „utilizatorul curent” răspund 401.
+- Doar pentru teste (Postman, curl): cu `ALLOW_DEMO_AUTH=true`, o cerere fără
+  token folosește antetul `X-User-Id` sau `DEMO_USER_ID`. Implicit e oprit.
+- La creare cont se acceptă doar emailurile din `ALLOWED_EMAIL_DOMAINS`.
 - SSO cu contul universității (Microsoft) are nevoie de înregistrarea aplicației
   de către departamentul IT; până atunci folosim login cu email și parolă.
 
+## Roluri și utilizatori (KAN-20)
+
+Două roluri (constrângerea `users_role_check`):
+
+- `RESEARCHER` – student / cercetător: caută resurse și face rezervări;
+- `ADMINISTRATOR` – cadru didactic / responsabil de laborator: administrează
+  resursele și conturile. Trigger-ul `trg_reservations_researcher` nu îi lasă
+  să facă rezervări (403).
+
+Rolul se citește din baza de date la fiecare cerere (`src/current-user.js`),
+deci o schimbare de rol se aplică imediat, fără un nou login.
+
+| Metodă | Adresă                     | Răspuns |
+| ------ | -------------------------- | ------- |
+| GET    | `/api/v1/users`            | toți utilizatorii – doar administratori |
+| PATCH  | `/api/v1/users/{id}/role`  | `{"role": "ADMINISTRATOR"}` sau `RESEARCHER`; 409 pentru propriul cont sau pentru un administrator responsabil de resurse |
+
+Un cercetător primește 403 la rutele de administrare, iar o cerere fără token 401.
+
+- Schimbarea rolului se face într-o tranzacție, cu administratorii blocați:
+  platforma rămâne mereu cu cel puțin un administrator, chiar dacă doi
+  administratori se retrogradează reciproc în același timp.
+- `responsible_admin_id` al unei resurse trebuie să fie un administrator
+  (400 altfel, la POST și PUT `/resources`). La POST fără responsabil,
+  responsabilul devine administratorul care creează resursa. La PUT, responsabilul
+  e obligatoriu (400 dacă lipsește).
+- POST/PUT/DELETE `/resources` și PATCH `/users/{id}/role` reverifică în tranzacție
+  că apelantul mai e administrator (403 dacă a fost retrogradat între timp).
+- Antetul `Authorization` trebuie să fie `Bearer <token>` (orice majuscule);
+  un antet greșit dă 401, fără să se mai folosească `X-User-Id`.
+
 ## Rezervările mele (KAN-32)
 
-Rutele lucrează cu rezervările **utilizatorului curent**. Până avem login,
-utilizatorul curent vine din antetul `X-User-Id` sau, dacă lipsește, din
-`DEMO_USER_ID` din `.env` (`src/current-user.js`).
+Rutele lucrează cu rezervările **utilizatorului curent** (cel din token-ul
+de login, vezi `src/current-user.js`).
 
 | Metodă | Adresă                                | Răspuns                                          |
 | ------ | ------------------------------------- | ------------------------------------------------ |
